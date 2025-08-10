@@ -8,6 +8,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.filters import StateFilter
 from aiogram.enums import ChatAction
 
 from .config import load_config
@@ -371,14 +372,14 @@ async def run() -> None:
     dp.message.register(handle_view, F.text.casefold() == "просмотр")
     dp.message.register(handle_edit, F.text.casefold() == "редактировать")
 
-    dp.message.register(add_step1, AddOrderStates.step1)
-    dp.message.register(add_step1_confirm, AddOrderStates.step1_confirm)
+    dp.message.register(add_step1, StateFilter(AddOrderStates.step1))
+    dp.message.register(add_step1_confirm, StateFilter(AddOrderStates.step1_confirm))
 
-    dp.message.register(add_step2, AddOrderStates.step2)
-    dp.message.register(add_step2_confirm, AddOrderStates.step2_confirm)
+    dp.message.register(add_step2, StateFilter(AddOrderStates.step2))
+    dp.message.register(add_step2_confirm, StateFilter(AddOrderStates.step2_confirm))
 
-    dp.message.register(edit_choose_id, EditStates.choose_id)
-    dp.message.register(edit_update_fields, EditStates.update_fields)
+    dp.message.register(edit_choose_id, StateFilter(EditStates.choose_id))
+    dp.message.register(edit_update_fields, StateFilter(EditStates.update_fields))
 
     await dp.start_polling(bot, allowed_updates=["message"])  # long polling
 

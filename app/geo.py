@@ -12,7 +12,7 @@ _config = load_config()
 
 
 def geocode_address(address: str) -> Optional[Tuple[float, float]]:
-    # Try Yandex Geocoder first if key present
+    # Yandex Geocoder first
     if _config.yandex_maps_api_key:
         try:
             url = "https://geocode-maps.yandex.ru/1.x"
@@ -43,11 +43,25 @@ def geocode_address(address: str) -> Optional[Tuple[float, float]]:
                     return float(lat_str), float(lon_str)
         except Exception:
             pass
+    # Fallback: Nominatim
+    try:
+        resp = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={"q": address, "format": "json", "limit": 1},
+            headers={"User-Agent": "vc2nt-bot/1.0"},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data:
+            return float(data[0]["lat"]), float(data[0]["lon"])  # type: ignore
+    except Exception:
+        pass
     return None
 
 
 def route_distance_km(coord_from: Tuple[float, float], coord_to: Tuple[float, float]) -> float:
-    # Prefer Yandex Routing if key exists
+    # Prefer Yandex Routing
     if _config.yandex_maps_api_key:
         try:
             url = "https://api.routing.yandex.net/v2/route"
@@ -76,14 +90,13 @@ def route_distance_km(coord_from: Tuple[float, float], coord_to: Tuple[float, fl
                 return round(float(distance_m) / 1000.0, 3)
         except Exception:
             pass
-    # Fallback to OSRM
+    # OSRM fallback
     try:
         url = (
             f"https://router.project-osrm.org/route/v1/driving/"
             f"{coord_from[1]},{coord_from[0]};{coord_to[1]},{coord_to[0]}"
         )
-        params = {"overview": "false"}
-        resp = requests.get(url, params=params, timeout=20)
+        resp = requests.get(url, params={"overview": "false"}, timeout=20)
         resp.raise_for_status()
         data = resp.json()
         routes = data.get("routes") or []
@@ -92,7 +105,7 @@ def route_distance_km(coord_from: Tuple[float, float], coord_to: Tuple[float, fl
             return round(float(distance_m) / 1000.0, 3)
     except Exception:
         pass
-    # Fallback to haversine
+    # Haversine fallback
     return round(haversine_km(coord_from, coord_to), 3)
 
 
