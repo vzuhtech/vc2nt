@@ -8,6 +8,7 @@ from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKey
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.enums import ChatAction
 
 from .config import load_config
 from .db import init_db, SessionLocal, Order
@@ -46,7 +47,7 @@ def ok_rewrite_keyboard() -> ReplyKeyboardMarkup:
 async def typing_spinner(bot: Bot, chat_id: int, stop: asyncio.Event) -> None:
     try:
         while not stop.is_set():
-            await bot.send_chat_action(chat_id, "typing")
+            await bot.send_chat_action(chat_id, ChatAction.TYPING)
             await asyncio.sleep(4)
     except Exception:
         return
@@ -86,7 +87,6 @@ async def _recognize_if_voice(message: Message, bot: Bot) -> Optional[str]:
 
 
 async def add_step1(message: Message, state: FSMContext, bot: Bot):
-    # show typing + technical message "Распознаю"
     stop = asyncio.Event()
     spinner = asyncio.create_task(typing_spinner(bot, message.chat.id, stop))
     tech_msg = await message.answer("Распознаю…")
@@ -107,7 +107,6 @@ async def add_step1(message: Message, state: FSMContext, bot: Bot):
             await tech_msg.edit_text("Не удалось распознать адреса. Отправьте в формате: 'номер; адрес начало; адрес конец'")
             return
 
-        # Compute distance
         coord_from = geocode_address(addr_from)
         coord_to = geocode_address(addr_to)
         if not coord_from or not coord_to:
@@ -115,7 +114,6 @@ async def add_step1(message: Message, state: FSMContext, bot: Bot):
             return
         distance = route_distance_km(coord_from, coord_to)
 
-        # Save into FSM and ask confirm
         await state.update_data(
             car_number=car_number,
             address_from=addr_from,
@@ -134,10 +132,6 @@ async def add_step1(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
     finally:
         stop.set()
-        try:
-            await asyncio.sleep(0)
-        except Exception:
-            pass
 
 
 async def add_step1_confirm(message: Message, state: FSMContext):
@@ -210,10 +204,6 @@ async def add_step2(message: Message, state: FSMContext, bot: Bot):
         await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
     finally:
         stop.set()
-        try:
-            await asyncio.sleep(0)
-        except Exception:
-            pass
 
 
 async def add_step2_confirm(message: Message, state: FSMContext):
