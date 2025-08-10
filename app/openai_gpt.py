@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Dict, Optional
 
@@ -13,7 +14,9 @@ def _client() -> Optional[OpenAI]:
     cfg = load_config()
     if not cfg.openai_api_key:
         return None
-    return OpenAI(api_key=cfg.openai_api_key)
+    # Use env var to configure client to avoid kwargs incompatibilities
+    os.environ["OPENAI_API_KEY"] = cfg.openai_api_key
+    return OpenAI()
 
 
 def _complete_json(system_prompt: str, user_text: str) -> Optional[Dict[str, Any]]:
@@ -49,7 +52,6 @@ def extract_step1_fields(text: str) -> Dict[str, Optional[str]]:
     address_to = (data.get("address_to") or "").strip() if isinstance(data, dict) else ""
 
     if not address_from or not address_to:
-        # Fallback heuristics
         plate_re = r"([АВЕКМНОРСТУХA-Z]\s?\d{3}\s?[АВЕКМНОРСТУХA-Z]{2}\s?\d{2,3})"
         m = re.search(plate_re, text, flags=re.IGNORECASE)
         if m and not car_number:
@@ -60,7 +62,6 @@ def extract_step1_fields(text: str) -> Dict[str, Optional[str]]:
             address_from = m_from.group(2).strip()
         if not address_to and m_to:
             address_to = (m_to.group(3) or "").strip()
-        # If still empty, try split by ';'
         if (not address_from or not address_to) and ";" in text:
             parts = [p.strip() for p in text.split(";") if p.strip()]
             if len(parts) >= 3:
@@ -98,7 +99,6 @@ def extract_step2_fields(text: str) -> Dict[str, Optional[str | float]]:
     unload_amount = _num(data.get("unload_amount")) if isinstance(data, dict) else None
 
     if load_amount is None or unload_amount is None:
-        # Fallback: first two numbers in text
         nums = re.findall(r"([0-9]+(?:[\.,][0-9]+)?)", text)
         if len(nums) >= 1 and load_amount is None:
             load_amount = float(nums[0].replace(",", "."))
