@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
@@ -15,6 +16,9 @@ from .db import init_db, SessionLocal, Order
 from .geo import geocode_address, route_distance_km
 from .openai_stt import whisper_stt_ogg_opus
 from .openai_gpt import extract_step1_fields, extract_step2_fields
+
+
+logger = logging.getLogger(__name__)
 
 
 class AddOrderStates(StatesGroup):
@@ -130,6 +134,12 @@ async def add_step1(message: Message, state: FSMContext, bot: Bot):
         )
         await tech_msg.edit_text(summary)
         await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
+    except Exception as e:
+        logger.exception("add_step1 failed")
+        try:
+            await tech_msg.edit_text("Произошла ошибка при распознавании. Попробуйте еще раз." )
+        except Exception:
+            await message.answer("Произошла ошибка при распознавании. Попробуйте еще раз.")
     finally:
         stop.set()
 
@@ -202,6 +212,12 @@ async def add_step2(message: Message, state: FSMContext, bot: Bot):
         )
         await tech_msg.edit_text(summary)
         await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
+    except Exception:
+        logger.exception("add_step2 failed")
+        try:
+            await tech_msg.edit_text("Произошла ошибка при распознавании. Попробуйте еще раз.")
+        except Exception:
+            await message.answer("Произошла ошибка при распознавании. Попробуйте еще раз.")
     finally:
         stop.set()
 
@@ -361,6 +377,7 @@ async def edit_update_fields(message: Message, state: FSMContext):
 
 
 async def run() -> None:
+    logging.basicConfig(level=logging.INFO)
     init_db()
 
     bot = Bot(load_config().telegram_bot_token)
@@ -371,14 +388,18 @@ async def run() -> None:
     dp.message.register(handle_view, F.text.casefold() == "просмотр")
     dp.message.register(handle_edit, F.text.casefold() == "редактировать")
 
-    dp.message.register(add_step1, StateFilter(AddOrderStates.step1))
-    dp.message.register(add_step1_confirm, StateFilter(AddOrderStates.step1_confirm))
+    # Step1: text and voice
+    dp.message.register(add_step1, StateFilter(AddOrderStates.step1), F.text)
+    dp.message.register(add_step1, StateFilter(AddOrderStates.step1), F.voice)
+    dp.message.register(add_step1_confirm, StateFilter(AddOrderStates.step1_confirm), F.text)
 
-    dp.message.register(add_step2, StateFilter(AddOrderStates.step2))
-    dp.message.register(add_step2_confirm, StateFilter(AddOrderStates.step2_confirm))
+    # Step2: text and voice
+    dp.message.register(add_step2, StateFilter(AddOrderStates.step2), F.text)
+    dp.message.register(add_step2, StateFilter(AddOrderStates.step2), F.voice)
+    dp.message.register(add_step2_confirm, StateFilter(AddOrderStates.step2_confirm), F.text)
 
-    dp.message.register(edit_choose_id, StateFilter(EditStates.choose_id))
-    dp.message.register(edit_update_fields, StateFilter(EditStates.update_fields))
+    dp.message.register(edit_choose_id, StateFilter(EditStates.choose_id), F.text)
+    dp.message.register(edit_update_fields, StateFilter(EditStates.update_fields), F.text)
 
     await dp.start_polling(bot, allowed_updates=["message"])  # long polling
 
