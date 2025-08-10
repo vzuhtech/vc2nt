@@ -1,89 +1,55 @@
-## Чат-бот учета нерудных материалов
+## Чат-бот учета нерудных материалов (Google stack)
 
 Функции:
 - Приветствие и меню: Добавить, Редактировать, Просмотр
-- Ответы текстом или голосом
-- Распознавание речи: Yandex SpeechKit
-- Разбор текста: YandexGPT (фолбэк на простые правила без ключей)
-- Геокодирование: Yandex Geocoder (фолбэк Nominatim)
-- Расчет расстояния: Yandex Maps Routing API (фолбэк OSRM/гаверсин)
-- Хранение заказов: локальная БД (для работы бота) + Google Sheets (основное). Если Google не настроен — XLSX на Яндекс.Диске как фолбэк.
-
-Почему XLSX на Яндекс.Диске: публичного API для построчного редактирования «Яндекс Таблиц» нет. Надежный способ хранить и править табличные данные через API — использовать Яндекс.Диск: бот скачивает Excel-файл, вносит изменения и загружает обратно. Можно открыть файл в Яндекс Таблицах через веб-интерфейс.
+- Ответы текстом или голосом (Google Speech-to-Text)
+- Разбор текста и извлечение полей (Gemini)
+- Геокодирование и расстояние (Google Maps: Geocoding + Directions)
+- Хранение заказов в Google Sheets (через сервисный аккаунт)
 
 ### Переменные окружения
 - `TELEGRAM_BOT_TOKEN` — токен Telegram-бота
-- `YANDEX_API_KEY` — API-ключ Yandex Cloud (SpeechKit + Foundation Models)
-- `YANDEX_FOLDER_ID` — Folder ID в Yandex Cloud
-- `YANDEX_MAPS_API_KEY` — API-ключ для Яндекс Карт (Геокодер/Маршрутизация)
-- `GSHEET_ID` — ID Google таблицы (строка из URL таблицы)
-- `GSERVICE_ACCOUNT_JSON` — JSON сервисного аккаунта Google (как строка целиком)
-- Фолбэк для Диска (необязательно):
-  - `YANDEX_DISK_OAUTH_TOKEN`
-  - `YANDEX_DISK_SHEET_PATH` (по умолчанию `disk:/orders.xlsx`)
-- `DATABASE_URL` — по умолчанию `sqlite:///data.db`
+- `GSHEET_ID` — ID Google Таблицы (из URL)
+- `GSERVICE_ACCOUNT_JSON` — JSON ключ сервисного аккаунта (строка целиком)
+- `GOOGLE_MAPS_API_KEY` — ключ Google Maps Platform (Geocoding + Directions)
+- `GCP_SERVICE_ACCOUNT_JSON` — JSON сервисного аккаунта для Google Cloud Speech-to-Text (строка целиком)
+- `GOOGLE_GENAI_API_KEY` — API key для Gemini (generative-ai)
+- `DATABASE_URL` — опционально, по умолчанию `sqlite:///data.db`
 
 ### Настройка Google Sheets
-1. В Google Cloud Console создайте проект.
-2. Включите API: Google Sheets API.
-3. Создайте сервисный аккаунт и ключ (тип JSON). Сохраните JSON.
-4. Создайте Google Таблицу, возьмите её ID из URL.
-5. Поделитесь таблицей с email сервисного аккаунта (минимум Editor).
-6. Сохраните JSON в переменную окружения `GSERVICE_ACCOUNT_JSON` целиком, а ID в `GSHEET_ID`.
+1. Создайте проект в Google Cloud Console.
+2. Включите Google Sheets API.
+3. Создайте сервисный аккаунт и JSON ключ. Содержимое JSON положите в `GSERVICE_ACCOUNT_JSON`.
+4. Создайте Google Таблицу, получите её ID из URL.
+5. Поделитесь таблицей с email сервисного аккаунта (роль Editor).
+
+### Настройка Google Maps Platform
+1. Включите APIs: Geocoding API и Directions API.
+2. Создайте ключ и задайте `GOOGLE_MAPS_API_KEY`.
+
+### Настройка Google Speech-to-Text
+1. Включите Cloud Speech-to-Text API.
+2. Создайте сервисный аккаунт и JSON ключ (может быть тем же, что и для Sheets, если у проекта нужные права).
+3. Положите содержимое JSON в `GCP_SERVICE_ACCOUNT_JSON`.
+
+### Настройка Gemini (Generative AI)
+1. Получите API key для Gemini и задайте `GOOGLE_GENAI_API_KEY`.
 
 ### Локальный запуск
-1. Python 3.11+
-2. Установить зависимости:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Экспортировать переменные окружения (Windows PowerShell):
-   ```powershell
-   $env:TELEGRAM_BOT_TOKEN = "<YOUR_TOKEN>"
-   $env:YANDEX_MAPS_API_KEY = "<MAPS_API_KEY>"
-   $env:GSHEET_ID = "<SHEET_ID>"
-   $env:GSERVICE_ACCOUNT_JSON = "<JSON_ЦЕЛИКОМ>"
-   # Опционально для голоса/ИИ и фолбэка Диска:
-   # $env:YANDEX_API_KEY = "<YC_API_KEY>"
-   # $env:YANDEX_FOLDER_ID = "<YC_FOLDER_ID>"
-   # $env:YANDEX_DISK_OAUTH_TOKEN = "<DISK_TOKEN>"
-   ```
-4. Запуск:
-   ```bash
-   python -m app.main
-   ```
-
-### Как получить ключи/токены
-
-- Yandex SpeechKit и YandexGPT (Yandex Cloud):
-  1) Зарегистрируйте аккаунт в Yandex Cloud и создайте каталог (Folder).
-  2) Включите сервисы «SpeechKit» и «Foundation Models» для каталога.
-  3) Создайте API Key в разделе безопасности (подходит «Api-Key ...»). Сохраните ключ и `Folder ID`.
-  4) Установите `YANDEX_API_KEY` и `YANDEX_FOLDER_ID`.
-
-- Yandex Maps API (Геокодер, Маршрутизация):
-  1) Откройте кабинет Яндекс Карт для бизнеса и создайте проект/ключ.
-  2) Подключите продукты «Геокодер» и «Маршрутизация/Получение деталей маршрута» (или «Матрица расстояний»).
-  3) Получите `API key` для серверного использования, настройте ограничения (по IP/рефереру при необходимости).
-  4) Установите переменную `YANDEX_MAPS_API_KEY`.
-  Примечание: вызовы тарифицируются. Маршрутизация считается платной услугой.
-
-- Яндекс.Диск (OAuth токен):
-  1) На `oauth.yandex.ru` зарегистрируйте приложение (тип: веб/скрипт). Разрешения: доступ к Яндекс.Диску (`cloud-api`), чтение/запись.
-  2) Получите OAuth токен через стандартный OAuth 2.0 флоу (либо вручную в консоли разработчика).
-  3) Установите `YANDEX_DISK_OAUTH_TOKEN`.
-  4) `YANDEX_DISK_SHEET_PATH` задает путь к XLSX, например `disk:/orders.xlsx`. При первом запуске файл создастся автоматически.
+```powershell
+pip install -r requirements.txt
+$env:TELEGRAM_BOT_TOKEN = "<BOT_TOKEN>"
+$env:GSHEET_ID = "<SHEET_ID>"
+$env:GSERVICE_ACCOUNT_JSON = "<SERVICE_JSON>"
+$env:GOOGLE_MAPS_API_KEY = "<MAPS_KEY>"
+$env:GCP_SERVICE_ACCOUNT_JSON = "<SERVICE_JSON>"
+$env:GOOGLE_GENAI_API_KEY = "<GEMINI_KEY>"
+python -m app.main
+```
 
 ### Как это работает
-- Шаг 1: парсим машина/адреса, геокодируем (Яндекс) и считаем расстояние (Яндекс).
-- Шаг 2: тип/загрузка/выгрузка → остаток. Запись сохраняется в БД и в Google Sheets. При редактировании строка обновляется. Если Google не настроен — синхронизация в XLSX на Яндекс.Диске.
+- Шаг 1: бот парсит машину/адреса (текст или голос), геокодирует адреса, получает расстояние по маршруту.
+- Шаг 2: тип груза, загрузка и выгрузка → считает остаток. Запись сохраняется в БД и синхронизируется в Google Sheets.
 
 ### Деплой на Railway
-- `Dockerfile`, `Procfile` (worker) и `railway.toml` уже в репозитории.
-- В Variables задайте минимум: `TELEGRAM_BOT_TOKEN`, `YANDEX_MAPS_API_KEY`, `GSHEET_ID`, `GSERVICE_ACCOUNT_JSON`. Для голоса/ИИ добавьте `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`. Фолбэк Диска — опционально.
-- Команда: `python -m app.main`.
-
-### Примечания
-- Если нет ключей Yandex Cloud, голос недоступен, а разбор текста — упрощенно.
-- Для Яндекс Карт используйте серверный ключ. Проверьте тарифы и квоты.
-- В XLSX нет конкурентного доступа — при одновременных правках возможны конфликты. Для высокой нагрузки лучше БД.
+- Заполните Variables значениями выше. Команда запуска — `python -m app.main`.
