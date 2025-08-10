@@ -5,14 +5,31 @@
 - Ответы текстом или голосом
 - Распознавание речи: Yandex SpeechKit
 - Разбор текста: YandexGPT (фолбэк на простые правила без ключей)
-- Расчет расстояния по адресам (Nominatim + OSRM)
-- Хранение заказов в БД (SQLite локально / PostgreSQL через Railway)
+- Геокодирование: Yandex Geocoder (фолбэк Nominatim)
+- Расчет расстояния: Yandex Maps Routing API (фолбэк OSRM/гаверсин)
+- Хранение заказов: локальная БД (для работы бота) + Google Sheets (основное). Если Google не настроен — XLSX на Яндекс.Диске как фолбэк.
+
+Почему XLSX на Яндекс.Диске: публичного API для построчного редактирования «Яндекс Таблиц» нет. Надежный способ хранить и править табличные данные через API — использовать Яндекс.Диск: бот скачивает Excel-файл, вносит изменения и загружает обратно. Можно открыть файл в Яндекс Таблицах через веб-интерфейс.
 
 ### Переменные окружения
 - `TELEGRAM_BOT_TOKEN` — токен Telegram-бота
 - `YANDEX_API_KEY` — API-ключ Yandex Cloud (SpeechKit + Foundation Models)
 - `YANDEX_FOLDER_ID` — Folder ID в Yandex Cloud
-- `DATABASE_URL` — опционально, например `postgresql+psycopg2://user:pass@host:port/dbname`. По умолчанию `sqlite:///data.db`
+- `YANDEX_MAPS_API_KEY` — API-ключ для Яндекс Карт (Геокодер/Маршрутизация)
+- `GSHEET_ID` — ID Google таблицы (строка из URL таблицы)
+- `GSERVICE_ACCOUNT_JSON` — JSON сервисного аккаунта Google (как строка целиком)
+- Фолбэк для Диска (необязательно):
+  - `YANDEX_DISK_OAUTH_TOKEN`
+  - `YANDEX_DISK_SHEET_PATH` (по умолчанию `disk:/orders.xlsx`)
+- `DATABASE_URL` — по умолчанию `sqlite:///data.db`
+
+### Настройка Google Sheets
+1. В Google Cloud Console создайте проект.
+2. Включите API: Google Sheets API.
+3. Создайте сервисный аккаунт и ключ (тип JSON). Сохраните JSON.
+4. Создайте Google Таблицу, возьмите её ID из URL.
+5. Поделитесь таблицей с email сервисного аккаунта (минимум Editor).
+6. Сохраните JSON в переменную окружения `GSERVICE_ACCOUNT_JSON` целиком, а ID в `GSHEET_ID`.
 
 ### Локальный запуск
 1. Python 3.11+
@@ -23,25 +40,50 @@
 3. Экспортировать переменные окружения (Windows PowerShell):
    ```powershell
    $env:TELEGRAM_BOT_TOKEN = "<YOUR_TOKEN>"
-   $env:YANDEX_API_KEY = "<YOUR_YC_API_KEY>"
-   $env:YANDEX_FOLDER_ID = "<YOUR_FOLDER_ID>"
-   # опционально
-   # $env:DATABASE_URL = "postgresql+psycopg2://..."
+   $env:YANDEX_MAPS_API_KEY = "<MAPS_API_KEY>"
+   $env:GSHEET_ID = "<SHEET_ID>"
+   $env:GSERVICE_ACCOUNT_JSON = "<JSON_ЦЕЛИКОМ>"
+   # Опционально для голоса/ИИ и фолбэка Диска:
+   # $env:YANDEX_API_KEY = "<YC_API_KEY>"
+   # $env:YANDEX_FOLDER_ID = "<YC_FOLDER_ID>"
+   # $env:YANDEX_DISK_OAUTH_TOKEN = "<DISK_TOKEN>"
    ```
 4. Запуск:
    ```bash
    python -m app.main
    ```
 
+### Как получить ключи/токены
+
+- Yandex SpeechKit и YandexGPT (Yandex Cloud):
+  1) Зарегистрируйте аккаунт в Yandex Cloud и создайте каталог (Folder).
+  2) Включите сервисы «SpeechKit» и «Foundation Models» для каталога.
+  3) Создайте API Key в разделе безопасности (подходит «Api-Key ...»). Сохраните ключ и `Folder ID`.
+  4) Установите `YANDEX_API_KEY` и `YANDEX_FOLDER_ID`.
+
+- Yandex Maps API (Геокодер, Маршрутизация):
+  1) Откройте кабинет Яндекс Карт для бизнеса и создайте проект/ключ.
+  2) Подключите продукты «Геокодер» и «Маршрутизация/Получение деталей маршрута» (или «Матрица расстояний»).
+  3) Получите `API key` для серверного использования, настройте ограничения (по IP/рефереру при необходимости).
+  4) Установите переменную `YANDEX_MAPS_API_KEY`.
+  Примечание: вызовы тарифицируются. Маршрутизация считается платной услугой.
+
+- Яндекс.Диск (OAuth токен):
+  1) На `oauth.yandex.ru` зарегистрируйте приложение (тип: веб/скрипт). Разрешения: доступ к Яндекс.Диску (`cloud-api`), чтение/запись.
+  2) Получите OAuth токен через стандартный OAuth 2.0 флоу (либо вручную в консоли разработчика).
+  3) Установите `YANDEX_DISK_OAUTH_TOKEN`.
+  4) `YANDEX_DISK_SHEET_PATH` задает путь к XLSX, например `disk:/orders.xlsx`. При первом запуске файл создастся автоматически.
+
+### Как это работает
+- Шаг 1: парсим машина/адреса, геокодируем (Яндекс) и считаем расстояние (Яндекс).
+- Шаг 2: тип/загрузка/выгрузка → остаток. Запись сохраняется в БД и в Google Sheets. При редактировании строка обновляется. Если Google не настроен — синхронизация в XLSX на Яндекс.Диске.
+
 ### Деплой на Railway
-- Репозиторий содержит `Dockerfile` и `Procfile` (тип процесса — worker)
-- В Railway создайте проект, подключите репозиторий, в Variables задайте:
-  - `TELEGRAM_BOT_TOKEN`
-  - `YANDEX_API_KEY`
-  - `YANDEX_FOLDER_ID`
-  - `DATABASE_URL` (если используете Railway PostgreSQL плагин)
-- Стартовая команда: `python -m app.main` (из `Procfile`)
+- `Dockerfile`, `Procfile` (worker) и `railway.toml` уже в репозитории.
+- В Variables задайте минимум: `TELEGRAM_BOT_TOKEN`, `YANDEX_MAPS_API_KEY`, `GSHEET_ID`, `GSERVICE_ACCOUNT_JSON`. Для голоса/ИИ добавьте `YANDEX_API_KEY`, `YANDEX_FOLDER_ID`. Фолбэк Диска — опционально.
+- Команда: `python -m app.main`.
 
 ### Примечания
-- Если нет ключей Yandex, распознавание голоса будет недоступно, а разбор текста будет по упрощенным правилам.
-- Для более точного расчета расстояний можно переключиться на Yandex Maps Routing API (потребуется отдельный ключ).
+- Если нет ключей Yandex Cloud, голос недоступен, а разбор текста — упрощенно.
+- Для Яндекс Карт используйте серверный ключ. Проверьте тарифы и квоты.
+- В XLSX нет конкурентного доступа — при одновременных правках возможны конфликты. Для высокой нагрузки лучше БД.
