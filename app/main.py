@@ -4,7 +4,7 @@ import asyncio
 from typing import Optional
 
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.filters import CommandStart
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -18,7 +18,9 @@ from .openai_gpt import extract_step1_fields, extract_step2_fields
 
 class AddOrderStates(StatesGroup):
     step1 = State()  # car_number, address_from, address_to
+    step1_confirm = State()
     step2 = State()  # cargo_type, load_amount, unload_amount
+    step2_confirm = State()
 
 
 class EditStates(StatesGroup):
@@ -31,6 +33,23 @@ def main_keyboard() -> ReplyKeyboardMarkup:
         keyboard=[[KeyboardButton(text="Добавить"), KeyboardButton(text="Редактировать")], [KeyboardButton(text="Просмотр")]],
         resize_keyboard=True,
     )
+
+
+def ok_rewrite_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Ок"), KeyboardButton(text="Переписать")]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+async def typing_spinner(bot: Bot, chat_id: int, stop: asyncio.Event) -> None:
+    try:
+        while not stop.is_set():
+            await bot.send_chat_action(chat_id, "typing")
+            await asyncio.sleep(4)
+    except Exception:
+        return
 
 
 async def handle_start(message: Message):
@@ -67,95 +86,169 @@ async def _recognize_if_voice(message: Message, bot: Bot) -> Optional[str]:
 
 
 async def add_step1(message: Message, state: FSMContext, bot: Bot):
-    text = message.text or ""
-    if not text:
-        rec = await _recognize_if_voice(message, bot)
-        if not rec:
+    # show typing + technical message "Распознаю"
+    stop = asyncio.Event()
+    spinner = asyncio.create_task(typing_spinner(bot, message.chat.id, stop))
+    tech_msg = await message.answer("Распознаю…")
+
+    try:
+        text = message.text or ""
+        if not text:
+            rec = await _recognize_if_voice(message, bot)
+            if not rec:
+                return
+            text = rec
+        fields = extract_step1_fields(text)
+        car_number = fields.get("car_number")
+        addr_from = fields.get("address_from")
+        addr_to = fields.get("address_to")
+
+        if not (addr_from and addr_to):
+            await tech_msg.edit_text("Не удалось распознать адреса. Отправьте в формате: 'номер; адрес начало; адрес конец'")
             return
-        text = rec
-    fields = extract_step1_fields(text)
-    car_number = fields.get("car_number")
-    addr_from = fields.get("address_from")
-    addr_to = fields.get("address_to")
 
-    if not (addr_from and addr_to):
-        await message.answer(
-            "Не удалось распознать адреса. Пожалуйста, отправьте текстом в формате:\n"
-            "'номер машины; адрес начало; адрес конец'"
-        )
-        return
+        # Compute distance
+        coord_from = geocode_address(addr_from)
+        coord_to = geocode_address(addr_to)
+        if not coord_from or not coord_to:
+            await tech_msg.edit_text("Не удалось геокодировать адреса. Проверьте написание и повторите.")
+            return
+        distance = route_distance_km(coord_from, coord_to)
 
-    # Compute distance
-    coord_from = geocode_address(addr_from)
-    coord_to = geocode_address(addr_to)
-    if not coord_from or not coord_to:
-        await message.answer("Не удалось геокодировать адреса. Проверьте написание и повторите.")
-        return
-    distance = route_distance_km(coord_from, coord_to)
-
-    with SessionLocal() as db:
-        order = Order(
-            user_id=message.from_user.id if message.from_user else 0,
+        # Save into FSM and ask confirm
+        await state.update_data(
             car_number=car_number,
             address_from=addr_from,
             address_to=addr_to,
             distance_km=distance,
         )
-        db.add(order)
-        db.commit()
-        db.refresh(order)
-        order_id = order.id
+        await state.set_state(AddOrderStates.step1_confirm)
+        summary = (
+            f"Распознано:\n"
+            f"Номер: {car_number or '-'}\n"
+            f"Откуда: {addr_from}\n"
+            f"Куда: {addr_to}\n"
+            f"Расстояние: {distance} км\n\nПодтвердить?"
+        )
+        await tech_msg.edit_text(summary)
+        await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
+    finally:
+        stop.set()
+        try:
+            await asyncio.sleep(0)
+        except Exception:
+            pass
 
-    await state.update_data(order_id=order_id)
-    await state.set_state(AddOrderStates.step2)
-    await message.answer(
-        f"Данные сохранены. Расстояние: {distance} км.\n"
-        f"Шаг 2. Отправьте одно сообщение (текст/голос) с: тип груза, загрузка, выгрузка.\n"
-        f"Пример: 'ЩПС, загрузка 20, выгрузка 5'."
-    )
+
+async def add_step1_confirm(message: Message, state: FSMContext):
+    answer = (message.text or "").strip().casefold()
+    if answer == "ок":
+        data = await state.get_data()
+        with SessionLocal() as db:
+            order = Order(
+                user_id=message.from_user.id if message.from_user else 0,
+                car_number=data.get("car_number"),
+                address_from=data.get("address_from"),
+                address_to=data.get("address_to"),
+                distance_km=data.get("distance_km"),
+            )
+            db.add(order)
+            db.commit()
+            db.refresh(order)
+            await state.update_data(order_id=order.id)
+        await state.set_state(AddOrderStates.step2)
+        await message.answer(
+            "Шаг 2. Отправьте одно сообщение (текст/голос) с: тип груза, загрузка, выгрузка.\n"
+            "Пример: 'ЩПС, загрузка 20, выгрузка 5'.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    elif answer == "переписать":
+        await state.set_state(AddOrderStates.step1)
+        await message.answer(
+            "Ок, отправьте заново Шаг 1: номер машины, адрес начала и адрес конца.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await message.answer("Пожалуйста, выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
 
 
 async def add_step2(message: Message, state: FSMContext, bot: Bot):
-    text = message.text or ""
-    if not text:
-        rec = await _recognize_if_voice(message, bot)
-        if not rec:
+    stop = asyncio.Event()
+    spinner = asyncio.create_task(typing_spinner(bot, message.chat.id, stop))
+    tech_msg = await message.answer("Распознаю…")
+
+    try:
+        text = message.text or ""
+        if not text:
+            rec = await _recognize_if_voice(message, bot)
+            if not rec:
+                return
+            text = rec
+
+        fields = extract_step2_fields(text)
+        cargo_type = (fields.get("cargo_type") or "").strip() or None
+        load_amount = fields.get("load_amount")
+        unload_amount = fields.get("unload_amount")
+        if load_amount is None or unload_amount is None:
+            await tech_msg.edit_text("Не удалось понять числа загрузки/выгрузки. Пример: 'загрузка 20, выгрузка 5'.")
             return
-        text = rec
+        remainder = round(float(load_amount) - float(unload_amount), 3)
 
-    fields = extract_step2_fields(text)
-    cargo_type = (fields.get("cargo_type") or "").strip() or None
-    load_amount = fields.get("load_amount")
-    unload_amount = fields.get("unload_amount")
-    if load_amount is None or unload_amount is None:
-        await message.answer("Не удалось понять числа загрузки/выгрузки. Пример: 'загрузка 20, выгрузка 5'.")
-        return
-    remainder = round(float(load_amount) - float(unload_amount), 3)
+        await state.update_data(
+            cargo_type=cargo_type,
+            load_amount=float(load_amount),
+            unload_amount=float(unload_amount),
+            remainder=remainder,
+        )
+        await state.set_state(AddOrderStates.step2_confirm)
+        summary = (
+            f"Распознано:\nТип: {cargo_type or '-'}\n"
+            f"Загрузка: {load_amount} | Выгрузка: {unload_amount}\n"
+            f"Остаток: {remainder}\n\nПодтвердить?"
+        )
+        await tech_msg.edit_text(summary)
+        await message.answer("Выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
+    finally:
+        stop.set()
+        try:
+            await asyncio.sleep(0)
+        except Exception:
+            pass
 
-    data = await state.get_data()
-    order_id = data.get("order_id")
-    if not order_id:
-        await message.answer("Не найден черновик заказа. Начните заново: Добавить.")
-        await state.clear()
-        return
 
-    with SessionLocal() as db:
-        order = db.get(Order, order_id)
-        if not order:
-            await message.answer("Заказ не найден. Начните заново: Добавить.")
+async def add_step2_confirm(message: Message, state: FSMContext):
+    answer = (message.text or "").strip().casefold()
+    if answer == "ок":
+        data = await state.get_data()
+        order_id = data.get("order_id")
+        if not order_id:
+            await message.answer("Не найден черновик заказа. Начните заново: Добавить.")
             await state.clear()
             return
-        order.cargo_type = cargo_type
-        order.load_amount = float(load_amount)
-        order.unload_amount = float(unload_amount)
-        order.remainder = remainder
-        db.add(order)
-        db.commit()
-
-    await message.answer(
-        f"Заказ #{order_id} сохранен. Остаток: {remainder}.", reply_markup=main_keyboard()
-    )
-    await state.clear()
+        with SessionLocal() as db:
+            order = db.get(Order, int(order_id))
+            if not order:
+                await message.answer("Заказ не найден. Начните заново: Добавить.")
+                await state.clear()
+                return
+            order.cargo_type = data.get("cargo_type")
+            order.load_amount = data.get("load_amount")
+            order.unload_amount = data.get("unload_amount")
+            order.remainder = data.get("remainder")
+            db.add(order)
+            db.commit()
+        await message.answer(
+            f"Заказ #{order_id} сохранен.", reply_markup=main_keyboard()
+        )
+        await state.clear()
+    elif answer == "переписать":
+        await state.set_state(AddOrderStates.step2)
+        await message.answer(
+            "Ок, отправьте заново Шаг 2: тип, загрузка и выгрузка.",
+            reply_markup=ReplyKeyboardRemove(),
+        )
+    else:
+        await message.answer("Пожалуйста, выберите: Ок или Переписать", reply_markup=ok_rewrite_keyboard())
 
 
 async def handle_view(message: Message):
@@ -289,7 +382,10 @@ async def run() -> None:
     dp.message.register(handle_edit, F.text.casefold() == "редактировать")
 
     dp.message.register(add_step1, AddOrderStates.step1)
+    dp.message.register(add_step1_confirm, AddOrderStates.step1_confirm)
+
     dp.message.register(add_step2, AddOrderStates.step2)
+    dp.message.register(add_step2_confirm, AddOrderStates.step2_confirm)
 
     dp.message.register(edit_choose_id, EditStates.choose_id)
     dp.message.register(edit_update_fields, EditStates.update_fields)
